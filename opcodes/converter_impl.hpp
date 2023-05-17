@@ -557,6 +557,7 @@ struct Converter::Impl
 		unsigned physical_address_descriptor_stride = 1;
 		unsigned physical_address_descriptor_offset = 0;
 		unsigned force_subgroup_size = 0;
+		bool opacity_micromap = false;
 	} options;
 
 	struct BindlessInfo

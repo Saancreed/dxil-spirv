@@ -241,6 +241,7 @@ enum class Option : uint32_t
 	PhysicalAddressDescriptorIndexing = 24,
 	ForceSubgroupSize = 25,
 	DenormPreserveSupport = 26,
+	OpacityMicromap = 27,
 	Count
 };
 
@@ -491,6 +492,16 @@ struct OptionArithmeticRelaxedPrecision : OptionBase
 {
 	OptionArithmeticRelaxedPrecision()
 		: OptionBase(Option::ArithmeticRelaxedPrecision)
+	{
+	}
+
+	bool enabled = false;
+};
+
+struct OptionOpacityMicromap : OptionBase
+{
+	OptionOpacityMicromap()
+		: OptionBase(Option::OpacityMicromap)
 	{
 	}
 
