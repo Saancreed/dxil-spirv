@@ -27,6 +27,7 @@
 #include "opcodes/opcodes_llvm_builtins.hpp"
 #include "opcodes/dxil/dxil_common.hpp"
 #include "opcodes/dxil/dxil_ags.hpp"
+#include "opcodes/dxil/dxil_nvapi.hpp"
 
 #include "dxil_converter.hpp"
 #include "logging.hpp"
@@ -712,6 +713,22 @@ bool Converter::Impl::emit_resources_global_mapping(DXIL::ResourceType type, con
 			auto resource_kind = static_cast<DXIL::ResourceKind>(get_constant_metadata(resource, 6));
 			if (bind_space == AgsUAVMagicRegisterSpace && resource_kind == DXIL::ResourceKind::RawBuffer)
 				ags.uav_magic_resource_type_index = index;
+			else if (resource_kind == DXIL::ResourceKind::StructuredBuffer && get_string_metadata(resource, 2) == "g_NvidiaExt")
+			{
+				auto *value = llvm::cast<llvm::ConstantAsMetadata>(resource->getOperand(1))->getValue();
+
+				while (auto *cexpr = llvm::dyn_cast<llvm::ConstantExpr>(value))
+				{
+					if (cexpr->getOpcode() == llvm::Instruction::BitCast)
+						value = cexpr->getOperand(0);
+					else
+						break;
+				}
+
+				nvapi.extension_external_global_constant = value;
+				nvapi.uav_magic_space = bind_space;
+				nvapi.uav_magic_slot = get_constant_metadata(resource, 4);
+			}
 		}
 		register_resource_meta_reference(resource->getOperand(1), type, index);
 	}
@@ -5037,6 +5054,35 @@ static bool instruction_has_side_effects(const llvm::Instruction &instruction)
 	return false;
 }
 
+bool emit_nvapi_instruction(Converter::Impl &impl, const llvm::Instruction &instruction, const Converter::Impl::Nvapi::InstructionReplacement &replacement)
+{
+	auto &builder = impl.builder();
+	switch ((NvapiOpcode)replacement.opcode)
+	{
+	case NvapiOpcode::NV_EXTN_OP_RT_TRIANGLE_OBJECT_POSITIONS:
+	{
+		builder.addExtension("SPV_KHR_ray_tracing_position_fetch");
+		builder.addCapability(spv::Capability::CapabilityRayTracingPositionFetchKHR);
+
+		spv::Id input = impl.spirv_module.get_builtin_shader_input(spv::BuiltIn::BuiltInHitTriangleVertexPositionsKHR);
+		auto *chain_op = impl.allocate(spv::OpAccessChain, builder.makePointer(spv::StorageClassInput, builder.makeFloatType(32)));
+		chain_op->add_id(input);
+		chain_op->add_id(builder.makeIntConstant(replacement.counter / 3));
+		chain_op->add_id(builder.makeUintConstant(replacement.counter % 3));
+		impl.add(chain_op);
+
+		auto *load_op = impl.allocate(spv::OpLoad, impl.get_id_for_value(&instruction), builder.makeFloatType(32));
+		load_op->add_id(chain_op->id);
+		impl.add(load_op);
+
+		return true;
+	}
+	}
+
+	LOGE("Unsupported NVAPI opcode: %u\n", replacement.opcode);
+	return false;
+}
+
 bool Converter::Impl::emit_instruction(CFGNode *block, const llvm::Instruction &instruction)
 {
 	if (instruction.isTerminator())
@@ -5052,6 +5098,19 @@ bool Converter::Impl::emit_instruction(CFGNode *block, const llvm::Instruction &
 	}
 
 	current_block = &block->ir.operations;
+
+	if (nvapi.extension_external_global_constant)
+	{
+		auto it = nvapi.instruction_replacements.find(&instruction);
+		if (it != nvapi.instruction_replacements.end())
+		{
+			return emit_nvapi_instruction(*this, instruction, it->second);
+		}
+		else if (nvapi.fakes.all.find(&instruction) != nvapi.fakes.all.end())
+		{
+			return true;
+		}
+	}
 
 	if (auto *call_inst = llvm::dyn_cast<llvm::CallInst>(&instruction))
 	{
@@ -6165,6 +6224,17 @@ bool Converter::Impl::analyze_instructions(const llvm::Function *function)
 			{
 				if (!analyze_compare_instruction(*this, cmp_inst))
 					return false;
+			}
+			else if (auto *cast_inst = llvm::dyn_cast<llvm::CastInst>(&inst))
+			{
+				auto it = nvapi.instruction_replacements.find(cast_inst->getOperand(0));
+				if (it != nvapi.instruction_replacements.end())
+				{
+					auto replacement = it->second;
+					nvapi.instruction_replacements.erase(it);
+					nvapi.instruction_replacements[cast_inst] = replacement;
+					nvapi.fakes.all.insert(cast_inst);
+				}
 			}
 			else if (auto *call_inst = llvm::dyn_cast<llvm::CallInst>(&inst))
 			{

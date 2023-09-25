@@ -1578,6 +1578,14 @@ bool analyze_load_instruction(Converter::Impl &impl, const llvm::LoadInst *inst)
 			}
 		}
 	}
+	else if (auto *global_var = llvm::dyn_cast<llvm::GlobalVariable>(inst->getPointerOperand()))
+	{
+		if (global_var == impl.nvapi.extension_external_global_constant)
+		{
+			impl.nvapi.fakes.loads.insert(inst);
+			impl.nvapi.fakes.all.insert(inst);
+		}
+	}
 
 	auto itr = impl.llvm_global_variable_to_resource_mapping.find(inst->getPointerOperand());
 	if (itr != impl.llvm_global_variable_to_resource_mapping.end())

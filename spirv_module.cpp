@@ -207,6 +207,9 @@ spv::Id SPIRVModule::Impl::get_type_for_builtin(spv::BuiltIn builtin, bool &requ
 	case spv::BuiltInFullyCoveredEXT:
 		return builder.makeBoolType();
 
+	case spv::BuiltInHitTriangleVertexPositionsKHR:
+		return builder.makeArrayType(builder.makeVectorType(builder.makeFloatType(32), 3), builder.makeUintConstant(3), 0);
+
 	default:
 		return 0;
 	}

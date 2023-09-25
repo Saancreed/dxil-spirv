@@ -259,6 +259,35 @@ struct Converter::Impl
 
 	void push_ags_instruction(const llvm::CallInst *instruction);
 
+	struct Nvapi
+	{
+		const llvm::Constant *extension_external_global_constant;
+		uint32_t uav_magic_space;
+		uint32_t uav_magic_slot;
+
+		struct
+		{
+			UnorderedSet<const llvm::Value *> all;
+			UnorderedSet<const llvm::Value *> loads;
+			UnorderedSet<const llvm::Value *> handles;
+			UnorderedSet<const llvm::Value *> annotated_handles;
+			UnorderedSet<const llvm::Value *> counters;
+		} fakes;
+
+		bool reading_inputs;
+		uint32_t opcode;
+		uint32_t instructions_count;
+		uint32_t current_instruction_counter;
+
+		struct InstructionReplacement
+		{
+			uint32_t opcode;
+			uint32_t counter;
+		};
+
+		UnorderedMap<const llvm::Value *, InstructionReplacement> instruction_replacements;
+	} nvapi;
+
 	// DXIL has no storage class concept for hit/callable/payload types.
 	const llvm::Type *llvm_hit_attribute_output_type = nullptr;
 	spv::Id llvm_hit_attribute_output_value = 0;

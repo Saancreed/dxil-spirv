@@ -38,6 +38,7 @@
 #include "opcodes/dxil/dxil_ray_tracing.hpp"
 #include "opcodes/dxil/dxil_mesh.hpp"
 #include "opcodes/dxil/dxil_ags.hpp"
+#include "opcodes/dxil/dxil_nvapi.hpp"
 
 namespace dxil_spv
 {
@@ -811,6 +812,18 @@ bool analyze_dxil_buffer_access_instruction(Converter::Impl &impl, const llvm::C
 	return true;
 }
 
+uint32_t nvapi_instructions_count_from_opcode(uint32_t opcode)
+{
+	switch ((NvapiOpcode)opcode)
+	{
+	case NV_EXTN_OP_RT_TRIANGLE_OBJECT_POSITIONS:
+		return 9;
+	}
+
+	LOGE("Unsupported NVAPI opcode: %u\n", opcode);
+	return 0;
+}
+
 bool analyze_dxil_instruction(Converter::Impl &impl, const llvm::CallInst *instruction, const llvm::BasicBlock *bb)
 {
 	// The opcode is encoded as a constant integer.
@@ -850,6 +863,13 @@ bool analyze_dxil_instruction(Converter::Impl &impl, const llvm::CallInst *instr
 		auto itr = impl.llvm_global_variable_to_resource_mapping.find(instruction->getOperand(1));
 		if (itr == impl.llvm_global_variable_to_resource_mapping.end())
 			return false;
+
+		if (impl.nvapi.fakes.loads.find(instruction->getOperand(1)) != impl.nvapi.fakes.loads.end())
+		{
+			impl.nvapi.fakes.handles.insert(instruction);
+			impl.nvapi.fakes.all.insert(instruction);
+			return true;
+		}
 
 		if (itr->second.type == DXIL::ResourceType::UAV)
 			impl.llvm_value_to_uav_resource_index_map[instruction] = itr->second.meta_index;
@@ -925,6 +945,13 @@ bool analyze_dxil_instruction(Converter::Impl &impl, const llvm::CallInst *instr
 		else if (meta.resource_op == DXIL::Op::CreateHandleFromBinding ||
 		         meta.resource_op == DXIL::Op::CreateHandleForLib)
 		{
+			if (impl.nvapi.fakes.handles.find(instruction->getOperand(1)) != impl.nvapi.fakes.handles.end())
+			{
+				impl.nvapi.fakes.annotated_handles.insert(instruction);
+				impl.nvapi.fakes.all.insert(instruction);
+				break;
+			}
+
 			if (meta.resource_type == DXIL::ResourceType::UAV)
 				impl.llvm_value_to_uav_resource_index_map[instruction] = meta.binding_index;
 			else if (meta.resource_type == DXIL::ResourceType::SRV)
@@ -954,6 +981,40 @@ bool analyze_dxil_instruction(Converter::Impl &impl, const llvm::CallInst *instr
 
 	case DXIL::Op::BufferUpdateCounter:
 	{
+		auto &nvapi = impl.nvapi;
+		if (nvapi.fakes.annotated_handles.find(instruction->getOperand(1)) != nvapi.fakes.annotated_handles.end())
+		{
+			nvapi.fakes.counters.insert(instruction);
+			nvapi.fakes.all.insert(instruction);
+
+			if (nvapi.reading_inputs)
+			{
+				nvapi.instructions_count = nvapi_instructions_count_from_opcode(nvapi.opcode);
+				nvapi.current_instruction_counter = 0;
+				nvapi.reading_inputs = false;
+			}
+			else
+			{
+				nvapi.current_instruction_counter += 1;
+
+				if (nvapi.current_instruction_counter >= nvapi.instructions_count)
+				{
+					nvapi.reading_inputs = true;
+					nvapi.instructions_count = 0;
+				}
+			}
+
+			if (!nvapi.reading_inputs)
+			{
+				Converter::Impl::Nvapi::InstructionReplacement replacement;
+				replacement.opcode = nvapi.opcode;
+				replacement.counter = nvapi.current_instruction_counter;
+				nvapi.instruction_replacements[instruction] = replacement;
+			}
+
+			break;
+		}
+
 		impl.llvm_values_using_update_counter.insert(instruction->getOperand(1));
 		impl.shader_analysis.has_side_effects = true;
 		break;
@@ -1135,6 +1196,29 @@ bool analyze_dxil_instruction(Converter::Impl &impl, const llvm::CallInst *instr
 		}
 
 		break;
+	}
+
+	case DXIL::Op::RawBufferStore:
+	{
+		auto &nvapi = impl.nvapi;
+		if (nvapi.fakes.annotated_handles.find(instruction->getOperand(1)) != nvapi.fakes.annotated_handles.end() &&
+			nvapi.fakes.counters.find(instruction->getOperand(2)) != nvapi.fakes.counters.end())
+		{
+			nvapi.fakes.all.insert(instruction);
+
+			uint32_t offset;
+			if (!get_constant_operand(instruction, 3, &offset))
+				return false;
+
+			if (offset == 0)
+			{
+				uint32_t opcode;
+				if (!get_constant_operand(instruction, 4, &opcode))
+					return false;
+
+				nvapi.opcode = opcode;
+			}
+		}
 	}
 
 	default:
