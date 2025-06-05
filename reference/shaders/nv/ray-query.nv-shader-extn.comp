@@ -1,0 +1,147 @@
+#version 460
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_ray_flags_primitive_culling : require
+#extension GL_NV_cluster_acceleration_structure : require
+layout(primitive_culling);
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+float _25;
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT _8;
+layout(set = 0, binding = 127, r32ui) uniform readonly writeonly uimageBuffer _11;
+layout(set = 7, binding = 0, r32ui) uniform readonly writeonly uimageBuffer _12;
+layout(set = 0, binding = 1, r32ui) uniform writeonly uimageBuffer _13;
+
+rayQueryEXT _21;
+
+void main()
+{
+    rayQueryInitializeEXT(_21, _8, 132u, 170u, vec3(_25), _25, vec3(_25), _25);
+    bool _30 = rayQueryProceedEXT(_21);
+    if (_30)
+    {
+        for (;;)
+        {
+            uint _35 = rayQueryGetIntersectionClusterIdNV(_21, bool(0u));
+            imageStore(_13, int(gl_LocalInvocationIndex * 2u), uvec4(_35));
+            rayQueryTerminateEXT(_21);
+            bool _41 = rayQueryProceedEXT(_21);
+            if (_41)
+            {
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
+    uint _31 = rayQueryGetIntersectionTypeEXT(_21, bool(1u));
+    if (!(_31 == 0u))
+    {
+        uint _42 = rayQueryGetIntersectionClusterIdNV(_21, bool(1u));
+        imageStore(_13, int((gl_LocalInvocationIndex * 2u) + 1u), uvec4(_42));
+    }
+}
+
+
+#if 0
+// SPIR-V disassembly
+; SPIR-V
+; Version: 1.4
+; Generator: Unknown(30017); 21022
+; Bound: 56
+; Schema: 0
+OpCapability Shader
+OpCapability ImageBuffer
+OpCapability RayQueryKHR
+OpCapability RayTraversalPrimitiveCullingKHR
+OpCapability RayTracingClusterAccelerationStructureNV
+OpExtension "SPV_KHR_ray_query"
+OpExtension "SPV_NV_cluster_acceleration_structure"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %3 "main" %8 %11 %12 %13 %17 %21
+OpExecutionMode %3 LocalSize 64 1 1
+OpName %3 "main"
+OpDecorate %8 DescriptorSet 0
+OpDecorate %8 Binding 0
+OpDecorate %11 DescriptorSet 0
+OpDecorate %11 Binding 127
+OpDecorate %11 NonReadable
+OpDecorate %11 NonWritable
+OpDecorate %12 DescriptorSet 7
+OpDecorate %12 Binding 0
+OpDecorate %13 DescriptorSet 0
+OpDecorate %13 Binding 1
+OpDecorate %13 NonReadable
+OpDecorate %17 BuiltIn LocalInvocationIndex
+%1 = OpTypeVoid
+%2 = OpTypeFunction %1
+%5 = OpTypeInt 32 0
+%6 = OpTypeAccelerationStructureKHR
+%7 = OpTypePointer UniformConstant %6
+%8 = OpVariable %7 UniformConstant
+%9 = OpTypeImage %5 Buffer 0 0 0 2 R32ui
+%10 = OpTypePointer UniformConstant %9
+%11 = OpVariable %10 UniformConstant
+%12 = OpVariable %10 UniformConstant
+%13 = OpVariable %10 UniformConstant
+%16 = OpTypePointer Input %5
+%17 = OpVariable %16 Input
+%19 = OpTypeRayQueryKHR
+%20 = OpTypePointer Private %19
+%21 = OpVariable %20 Private
+%22 = OpConstant %5 132
+%23 = OpConstant %5 170
+%24 = OpTypeFloat 32
+%26 = OpTypeVector %24 3
+%29 = OpTypeBool
+%32 = OpConstant %5 1
+%34 = OpConstant %5 0
+%38 = OpConstant %5 2
+%39 = OpTypeVector %5 4
+%3 = OpFunction %1 None %2
+%4 = OpLabel
+%25 = OpUndef %24
+OpBranch %48
+%48 = OpLabel
+%14 = OpLoad %9 %13
+%15 = OpLoad %6 %8
+%18 = OpLoad %5 %17
+%27 = OpCompositeConstruct %26 %25 %25 %25
+%28 = OpCompositeConstruct %26 %25 %25 %25
+OpRayQueryInitializeKHR %21 %15 %22 %23 %27 %25 %28 %25
+%30 = OpRayQueryProceedKHR %29 %21
+OpSelectionMerge %52 None
+OpBranchConditional %30 %49 %52
+%49 = OpLabel
+OpBranch %50
+%50 = OpLabel
+%35 = OpRayQueryGetClusterIdNV %5 %21 %34
+%36 = OpShiftLeftLogical %5 %18 %32
+%37 = OpIMul %5 %18 %38
+%40 = OpCompositeConstruct %39 %35 %35 %35 %35
+OpImageWrite %14 %37 %40
+OpRayQueryTerminateKHR %21
+%41 = OpRayQueryProceedKHR %29 %21
+OpLoopMerge %51 %50 None
+OpBranchConditional %41 %50 %51
+%51 = OpLabel
+OpBranch %52
+%52 = OpLabel
+%31 = OpRayQueryGetIntersectionTypeKHR %5 %21 %32
+%33 = OpIEqual %29 %31 %34
+OpSelectionMerge %54 None
+OpBranchConditional %33 %54 %53
+%53 = OpLabel
+%42 = OpRayQueryGetClusterIdNV %5 %21 %32
+%43 = OpShiftLeftLogical %5 %18 %32
+%44 = OpBitwiseOr %5 %43 %32
+%45 = OpIMul %5 %18 %38
+%46 = OpIAdd %5 %45 %32
+%47 = OpCompositeConstruct %39 %42 %42 %42 %42
+OpImageWrite %14 %46 %47
+OpBranch %54
+%54 = OpLabel
+OpReturn
+OpFunctionEnd
+#endif

@@ -1,0 +1,17 @@
+#define NV_SHADER_EXTN_SLOT u127
+#define NV_SHADER_EXTN_REGISTER_SPACE space0
+
+#include "nvHLSLExtns.h"
+
+struct Payload
+{
+	uint lo;
+	uint hi;
+};
+
+[shader("anyhit")]
+void RayHit(inout Payload payload, BuiltInTriangleIntersectionAttributes attr)
+{
+	payload.lo = NvGetSpecial(NV_SPECIALOP_GLOBAL_TIMER_LO);
+	payload.hi = NvGetSpecial(NV_SPECIALOP_GLOBAL_TIMER_HI);
+}

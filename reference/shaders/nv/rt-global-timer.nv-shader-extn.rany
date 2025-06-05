@@ -1,0 +1,87 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_shader_realtime_clock : require
+
+struct _6
+{
+    uint _m0;
+    uint _m1;
+};
+
+struct _11
+{
+    vec2 _m0;
+};
+
+layout(location = 0) rayPayloadInEXT _6 payload;
+hitAttributeEXT _11 hit;
+
+void main()
+{
+    uvec2 _15 = clockRealtime2x32EXT();
+    uvec2 _18 = clockRealtime2x32EXT();
+    payload._m0 = _15.x;
+    payload._m1 = _18.y;
+}
+
+
+#if 0
+// SPIR-V disassembly
+; SPIR-V
+; Version: 1.4
+; Generator: Unknown(30017); 21022
+; Bound: 26
+; Schema: 0
+OpCapability Shader
+OpCapability UniformBufferArrayDynamicIndexing
+OpCapability SampledImageArrayDynamicIndexing
+OpCapability StorageBufferArrayDynamicIndexing
+OpCapability StorageImageArrayDynamicIndexing
+OpCapability RayTracingKHR
+OpCapability ShaderClockKHR
+OpCapability RuntimeDescriptorArray
+OpCapability UniformBufferArrayNonUniformIndexing
+OpCapability SampledImageArrayNonUniformIndexing
+OpCapability StorageBufferArrayNonUniformIndexing
+OpCapability StorageImageArrayNonUniformIndexing
+OpExtension "SPV_EXT_descriptor_indexing"
+OpExtension "SPV_KHR_ray_tracing"
+OpExtension "SPV_KHR_shader_clock"
+OpMemoryModel Logical GLSL450
+OpEntryPoint AnyHitKHR %3 "main" %8 %13
+OpName %3 "main"
+OpName %6 ""
+OpName %8 "payload"
+OpName %11 ""
+OpName %13 "hit"
+%1 = OpTypeVoid
+%2 = OpTypeFunction %1
+%5 = OpTypeInt 32 0
+%6 = OpTypeStruct %5 %5
+%7 = OpTypePointer IncomingRayPayloadKHR %6
+%8 = OpVariable %7 IncomingRayPayloadKHR
+%9 = OpTypeFloat 32
+%10 = OpTypeVector %9 2
+%11 = OpTypeStruct %10
+%12 = OpTypePointer HitAttributeKHR %11
+%13 = OpVariable %12 HitAttributeKHR
+%14 = OpTypeVector %5 2
+%16 = OpConstant %5 1
+%20 = OpTypePointer IncomingRayPayloadKHR %5
+%22 = OpConstant %5 0
+%3 = OpFunction %1 None %2
+%4 = OpLabel
+OpBranch %24
+%24 = OpLabel
+%15 = OpReadClockKHR %14 %16
+%17 = OpCompositeExtract %5 %15 0
+%18 = OpReadClockKHR %14 %16
+%19 = OpCompositeExtract %5 %18 1
+%21 = OpInBoundsAccessChain %20 %8 %22
+OpStore %21 %17
+%23 = OpInBoundsAccessChain %20 %8 %16
+OpStore %23 %19
+OpReturn
+OpFunctionEnd
+#endif
