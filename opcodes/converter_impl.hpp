@@ -31,6 +31,7 @@
 #include "scratch_pool.hpp"
 #include "descriptor_qa.hpp"
 #include "opcodes.hpp"
+#include "opcodes/dxil/dxil_nvshader.hpp"
 
 #include "GLSL.std.450.h"
 

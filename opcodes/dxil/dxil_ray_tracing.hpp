@@ -77,11 +77,12 @@ inline bool emit_ray_query_system_value_instruction(Converter::Impl &impl, const
 }
 
 bool emit_ray_query_get_value_instruction(Converter::Impl &impl, const llvm::CallInst *instruction,
-                                          spv::Op opcode, uint32_t vecsize, spv::RayQueryIntersection intersection);
+                                          const llvm::CallInst *source, spv::Op opcode, uint32_t vecsize,
+                                          spv::RayQueryIntersection intersection);
 template <spv::Op opcode, uint32_t vecsize, spv::RayQueryIntersection intersection>
 inline bool emit_ray_query_get_value_instruction(Converter::Impl &impl, const llvm::CallInst *instruction)
 {
-	return emit_ray_query_get_value_instruction(impl, instruction, opcode, vecsize, intersection);
+	return emit_ray_query_get_value_instruction(impl, instruction, instruction, opcode, vecsize, intersection);
 }
 
 bool emit_ray_query_get_matrix_value_instruction(Converter::Impl &impl, const llvm::CallInst *instruction,

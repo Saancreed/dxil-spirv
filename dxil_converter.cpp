@@ -27,6 +27,8 @@
 #include "opcodes/opcodes_llvm_builtins.hpp"
 #include "opcodes/dxil/dxil_common.hpp"
 #include "opcodes/dxil/dxil_ags.hpp"
+#include "opcodes/dxil/dxil_nvshader.hpp"
+#include "opcodes/dxil/dxil_ray_tracing.hpp"
 #include "opcodes/dxil/dxil_workgraph.hpp"
 
 #include "dxil_converter.hpp"
@@ -765,6 +767,24 @@ bool Converter::Impl::emit_resources_global_mapping(DXIL::ResourceType type, con
 			auto resource_kind = static_cast<DXIL::ResourceKind>(get_constant_metadata(resource, 6));
 			if (bind_space == AgsUAVMagicRegisterSpace && resource_kind == DXIL::ResourceKind::RawBuffer)
 				ags.uav_magic_resource_type_index = index;
+			else if (options.nv_shader_extn.enabled &&
+				resource_kind == DXIL::ResourceKind::StructuredBuffer &&
+				bind_space == options.nv_shader_extn.space &&
+				get_constant_metadata(resource, 4) == options.nv_shader_extn.slot)
+			{
+				auto *value = llvm::cast<llvm::ConstantAsMetadata>(resource->getOperand(1))->getValue();
+
+				while (auto *cexpr = llvm::dyn_cast<llvm::ConstantExpr>(value))
+				{
+					if (cexpr->getOpcode() == llvm::Instruction::BitCast)
+						value = cexpr->getOperand(0);
+					else
+						break;
+				}
+
+				nvshader.extension_external_global_constant = value;
+				spirv_module.set_override_spirv_version(0x10400);
+			}
 		}
 		register_resource_meta_reference(resource->getOperand(1), type, index);
 	}
@@ -5576,6 +5596,20 @@ static bool instruction_has_side_effects(const llvm::Instruction &instruction)
 	return false;
 }
 
+bool emit_nvshader_instruction(Converter::Impl &impl, const llvm::CallInst *instruction,
+                               const NvShaderInstruction &replacement)
+{
+	auto &builder = impl.builder();
+	switch (replacement.opcode)
+	{
+	default:
+	{
+		LOGE("Unsupported NvShader opcode: %u.\n", replacement.opcode);
+		return false;
+	}
+	}
+}
+
 bool Converter::Impl::emit_instruction(CFGNode *block, const llvm::Instruction &instruction)
 {
 	if (instruction.isTerminator())
@@ -5594,6 +5628,19 @@ bool Converter::Impl::emit_instruction(CFGNode *block, const llvm::Instruction &
 
 	if (auto *call_inst = llvm::dyn_cast<llvm::CallInst>(&instruction))
 	{
+		if (nvshader.extension_external_global_constant)
+		{
+			auto it = nvshader.replacements.find(call_inst);
+			if (it != nvshader.replacements.end())
+			{
+				return emit_nvshader_instruction(*this, call_inst, it->second);
+			}
+			else if (nvshader.fakes.all.find(&instruction) != nvshader.fakes.all.end())
+			{
+				return true;
+			}
+		}
+
 		auto *called_function = call_inst->getCalledFunction();
 		if (strncmp(called_function->getName().data(), "dx.op", 5) == 0)
 		{
@@ -5611,6 +5658,8 @@ bool Converter::Impl::emit_instruction(CFGNode *block, const llvm::Instruction &
 			return false;
 		}
 	}
+	else if (nvshader.extension_external_global_constant && nvshader.fakes.all.find(&instruction) != nvshader.fakes.all.end())
+		return true;
 	else if (auto *phi_inst = llvm::dyn_cast<llvm::PHINode>(&instruction))
 		return emit_phi_instruction(block, *phi_inst);
 	else

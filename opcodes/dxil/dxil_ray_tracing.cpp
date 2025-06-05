@@ -510,11 +510,12 @@ bool emit_ray_query_system_value_instruction(Converter::Impl &impl, const llvm::
 }
 
 bool emit_ray_query_get_value_instruction(Converter::Impl &impl, const llvm::CallInst *instruction,
-                                          spv::Op opcode, uint32_t vecsize, spv::RayQueryIntersection intersection)
+                                          const llvm::CallInst *source, spv::Op opcode, uint32_t vecsize,
+                                          spv::RayQueryIntersection intersection)
 {
 	auto &builder = impl.builder();
 	spv::Id ray_object_id = 0;
-	if (!build_ray_query_object(impl, instruction->getOperand(1), ray_object_id))
+	if (!build_ray_query_object(impl, source->getOperand(1), ray_object_id))
 		return false;
 
 	if (vecsize == 1)

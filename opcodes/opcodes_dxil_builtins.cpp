@@ -38,6 +38,7 @@
 #include "opcodes/dxil/dxil_ray_tracing.hpp"
 #include "opcodes/dxil/dxil_mesh.hpp"
 #include "opcodes/dxil/dxil_ags.hpp"
+#include "opcodes/dxil/dxil_nvshader.hpp"
 #include "opcodes/dxil/dxil_workgraph.hpp"
 
 namespace dxil_spv
@@ -1008,7 +1009,22 @@ bool analyze_dxil_instruction(Converter::Impl &impl, const llvm::CallInst *instr
 			return false;
 
 		if (static_cast<DXIL::ResourceType>(resource_type_operand) == DXIL::ResourceType::UAV)
+		{
+			if (impl.options.nv_shader_extn.enabled)
+			{
+				uint32_t slot;
+				if (resource_range == impl.options.nv_shader_extn.space &&
+					get_constant_operand(instruction, 3, &slot) &&
+					slot == impl.options.nv_shader_extn.slot)
+				{
+					impl.nvshader.fakes.handles.insert(instruction);
+					impl.nvshader.fakes.all.insert(instruction);
+					impl.spirv_module.set_override_spirv_version(0x10400);
+					return true;
+				}
+			}
 			impl.llvm_value_to_uav_resource_index_map[instruction] = resource_range;
+		}
 		else if (static_cast<DXIL::ResourceType>(resource_type_operand) == DXIL::ResourceType::SRV)
 			impl.llvm_value_to_srv_resource_index_map[instruction] = resource_range;
 		else if (static_cast<DXIL::ResourceType>(resource_type_operand) == DXIL::ResourceType::CBV)
@@ -1021,6 +1037,13 @@ bool analyze_dxil_instruction(Converter::Impl &impl, const llvm::CallInst *instr
 
 	case DXIL::Op::CreateHandleForLib:
 	{
+		if (impl.nvshader.fakes.loads.find(instruction->getOperand(1)) != impl.nvshader.fakes.loads.end())
+		{
+			impl.nvshader.fakes.handles.insert(instruction);
+			impl.nvshader.fakes.all.insert(instruction);
+			return true;
+		}
+
 		auto itr = impl.llvm_global_variable_to_resource_mapping.find(instruction->getOperand(1));
 		if (itr == impl.llvm_global_variable_to_resource_mapping.end())
 			return false;
@@ -1099,6 +1122,13 @@ bool analyze_dxil_instruction(Converter::Impl &impl, const llvm::CallInst *instr
 		else if (meta.resource_op == DXIL::Op::CreateHandleFromBinding ||
 		         meta.resource_op == DXIL::Op::CreateHandleForLib)
 		{
+			if (impl.nvshader.fakes.handles.find(instruction->getOperand(1)) != impl.nvshader.fakes.handles.end())
+			{
+				impl.nvshader.fakes.handles.insert(instruction);
+				impl.nvshader.fakes.all.insert(instruction);
+				break;
+			}
+
 			if (meta.resource_type == DXIL::ResourceType::UAV)
 				impl.llvm_value_to_uav_resource_index_map[instruction] = meta.binding_index;
 			else if (meta.resource_type == DXIL::ResourceType::SRV)
