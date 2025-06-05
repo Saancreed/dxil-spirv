@@ -1128,6 +1128,41 @@ bool analyze_dxil_instruction(Converter::Impl &impl, const llvm::CallInst *instr
 
 	case DXIL::Op::BufferUpdateCounter:
 	{
+		auto &nvshader = impl.nvshader;
+		if (nvshader.fakes.handles.find(instruction->getOperand(1)) != nvshader.fakes.handles.end())
+		{
+			nvshader.fakes.counters.insert(instruction);
+			nvshader.fakes.all.insert(instruction);
+
+			if (nvshader.reading_inputs)
+			{
+				nvshader.num_instructions = nvshader_num_instructions_from_opcode(nvshader.active_opcode);
+				nvshader.current_phase = 0;
+				nvshader.reading_inputs = false;
+			}
+			else if (++nvshader.current_phase >= nvshader.num_instructions)
+			{
+				nvshader.reading_inputs = true;
+				nvshader.num_instructions = 0;
+				nvshader.last_initiating_inst = instruction;
+				nvshader.active_opcode = NvShaderOpcode::NV_EXTN_OP_NONE;
+				nvshader.active_inputs.clear();
+			}
+
+			if (!nvshader.reading_inputs)
+			{
+				NvShaderInstruction replacement;
+				replacement.initiating_inst = nvshader.last_initiating_inst;
+				replacement.original_inst = instruction;
+				replacement.inputs = nvshader.active_inputs;
+				replacement.opcode = nvshader.active_opcode;
+				replacement.phase = nvshader.current_phase;
+				nvshader.replacements.emplace(instruction, std::move(replacement));
+			}
+
+			break;
+		}
+
 		impl.llvm_values_using_update_counter.insert(instruction->getOperand(1));
 		impl.shader_analysis.has_side_effects = true;
 		break;
@@ -1414,6 +1449,38 @@ bool analyze_dxil_instruction(Converter::Impl &impl, const llvm::CallInst *instr
 		if (!analyze_dxil_ags_op(impl, instruction))
 			return false;
 		break;
+
+	case DXIL::Op::RawBufferStore:
+	{
+		auto &nvshader = impl.nvshader;
+		if (nvshader.fakes.handles.find(instruction->getOperand(1)) != nvshader.fakes.handles.end() &&
+			nvshader.fakes.counters.find(instruction->getOperand(2)) != nvshader.fakes.counters.end())
+		{
+			nvshader.fakes.all.insert(instruction);
+
+			uint32_t offset;
+			if (!get_constant_operand(instruction, 3, &offset))
+				return false;
+
+			if (offset == 0)
+			{
+				uint32_t opcode;
+				if (!get_constant_operand(instruction, 4, &opcode))
+					return false;
+
+				nvshader.active_opcode = static_cast<NvShaderOpcode>(opcode);
+			}
+			else
+			{
+				auto *input = instruction->getOperand(4);
+				nvshader.active_inputs.emplace(offset, input);
+
+				auto *cast = llvm::dyn_cast<llvm::CastInst>(input);
+				if (cast && cast->getOpcode() == llvm::Instruction::CastOps::BitCast)
+					nvshader.fakes.all.insert(input);
+			}
+		}
+	}
 
 	default:
 		break;

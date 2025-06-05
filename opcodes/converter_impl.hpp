@@ -350,6 +350,28 @@ struct Converter::Impl
 
 	void push_ags_instruction(const llvm::CallInst *instruction);
 
+	struct NvShader
+	{
+		const llvm::Constant *extension_external_global_constant = nullptr;
+
+		struct
+		{
+			UnorderedSet<const llvm::Value *> all;
+			UnorderedSet<const llvm::Value *> loads;
+			UnorderedSet<const llvm::Value *> handles;
+			UnorderedSet<const llvm::Value *> counters;
+		} fakes;
+
+		bool reading_inputs = false;
+		const llvm::CallInst *last_initiating_inst = nullptr;
+		UnorderedMap<uint32_t, const llvm::Value *> active_inputs;
+		NvShaderOpcode active_opcode = NvShaderOpcode::NV_EXTN_OP_NONE;
+		uint32_t num_instructions = 0;
+		uint32_t current_phase = 0;
+
+		UnorderedMap<const llvm::Value *, NvShaderInstruction> replacements;
+	} nvshader;
+
 	// DXIL has no storage class concept for hit/callable/payload types.
 	const llvm::Type *llvm_hit_attribute_output_type = nullptr;
 	spv::Id llvm_hit_attribute_output_value = 0;

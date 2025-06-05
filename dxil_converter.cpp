@@ -7693,6 +7693,16 @@ bool Converter::Impl::analyze_instructions(llvm::Function *func)
 				if (!analyze_compare_instruction(*this, cmp_inst))
 					return false;
 			}
+			else if (auto *cast_inst = llvm::dyn_cast<llvm::CastInst>(&inst))
+			{
+				auto it = nvshader.replacements.find(cast_inst->getOperand(0));
+				if (it != nvshader.replacements.end())
+				{
+					auto replacement = it->second;
+					nvshader.fakes.all.insert(cast_inst);
+					rewrite_value(replacement.original_inst, get_id_for_value(cast_inst));
+				}
+			}
 			else if (auto *call_inst = llvm::dyn_cast<llvm::CallInst>(&inst))
 			{
 				auto *called_function = call_inst->getCalledFunction();
