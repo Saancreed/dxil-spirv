@@ -33,9 +33,34 @@ uint32_t nvshader_num_instructions_from_opcode(NvShaderOpcode opcode)
 	{
 	case NvShaderOpcode::NV_EXTN_OP_GET_SPECIAL:
 		return 1;
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_TRACE_RAY:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_HIT:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_HIT_WITH_RECORD_INDEX:
+		return 2;
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_MISS:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_REORDER_THREAD:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_INVOKE:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_IS_MISS:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_INSTANCE_ID:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_INSTANCE_INDEX:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_PRIMITIVE_INDEX:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_GEOMETRY_INDEX:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_HIT_KIND:
+		return 1;
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_RAY_DESC:
+		return 8;
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_ATTRIBUTES:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_SHADER_TABLE_INDEX:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_LOAD_LOCAL_ROOT_TABLE_CONSTANT:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_IS_HIT:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_IS_NOP:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_NOP:
+		return 1;
 	case NvShaderOpcode::NV_EXTN_OP_RT_GET_CLUSTER_ID:
 	case NvShaderOpcode::NV_EXTN_OP_RT_GET_CANDIDATE_CLUSTER_ID:
 	case NvShaderOpcode::NV_EXTN_OP_RT_GET_COMMITTED_CLUSTER_ID:
+		return 1;
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_CLUSTER_ID:
 		return 1;
 	default:
 		LOGE("Unsupported NvShader opcode: %u.\n", opcode);

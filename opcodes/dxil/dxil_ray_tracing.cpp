@@ -80,6 +80,149 @@ bool emit_trace_ray_instruction(Converter::Impl &impl, const llvm::CallInst *ins
 	spv::Id multiplier_for_geometry = impl.get_id_for_value(inst->getOperand(5));
 	spv::Id miss_shader_index = impl.get_id_for_value(inst->getOperand(6));
 
+	auto it = impl.nvshader.hit_objects_by_trace_handles.find(inst->getOperand(6));
+	if (it != impl.nvshader.hit_objects_by_trace_handles.end())
+	{
+		auto *hit_object_deferred_instruction = it->second;
+
+		switch (hit_object_deferred_instruction->opcode)
+		{
+		case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_TRACE_RAY:
+		{
+			spv::Id ray_origin[3];
+			spv::Id ray_dir[3];
+
+			for (unsigned i = 0; i < 3; i++)
+			{
+				ray_origin[i] = impl.get_id_for_value(inst->getOperand(7 + i));
+				ray_dir[i] = impl.get_id_for_value(inst->getOperand(11 + i));
+			}
+
+			spv::Id tmin = impl.get_id_for_value(inst->getOperand(10));
+			spv::Id tmax = impl.get_id_for_value(inst->getOperand(14));
+
+			spv::Id ray_origin_vec = impl.build_vector(builder.makeFloatType(32), ray_origin, 3);
+			spv::Id ray_dir_vec = impl.build_vector(builder.makeFloatType(32), ray_dir, 3);
+			auto *ray_payload = inst->getOperand(15);
+
+			bool needs_temp_copy = impl.get_needs_temp_storage_copy(ray_payload);
+			spv::Id ray_payload_var_id = needs_temp_copy
+				? emit_temp_storage_copy(impl, ray_payload, spv::StorageClassRayPayloadKHR)
+				: impl.get_id_for_value(ray_payload);
+
+			spv::Id variable = impl.create_variable(spv::StorageClass::StorageClassPrivate, builder.makeHitObjectNVType());
+			impl.rewrite_value(hit_object_deferred_instruction->hit_object_handle, variable);
+
+			auto op = impl.allocate(spv::Op::OpHitObjectTraceRayNV);
+			op->add_id(variable);
+			op->add_id(acceleration_structure);
+			op->add_id(ray_flags);
+			op->add_id(instance_inclusion_mask);
+			op->add_id(ray_contribution_to_hit_group);
+			op->add_id(multiplier_for_geometry);
+			op->add_id(impl.get_id_for_value(hit_object_deferred_instruction->miss_shader_index));
+			op->add_id(ray_origin_vec);
+			op->add_id(tmin);
+			op->add_id(ray_dir_vec);
+			op->add_id(tmax);
+			op->add_id(ray_payload_var_id);
+			impl.add(op);
+
+			if (needs_temp_copy)
+				emit_temp_storage_resolve(impl, ray_payload, ray_payload_var_id);
+
+			return true;
+		}
+		case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_HIT:
+		case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_HIT_WITH_RECORD_INDEX:
+		{
+			auto *hit_object = hit_object_deferred_instruction->hit_object_handle;
+			auto *instance_index = hit_object_deferred_instruction->instance_index;
+			auto *geometry_index = hit_object_deferred_instruction->geometry_index;
+			auto *primitive_index = hit_object_deferred_instruction->primitive_index;
+			auto *hit_kind = hit_object_deferred_instruction->hit_kind;
+			auto *attributes = hit_object_deferred_instruction->attributes;
+
+			spv::Id ray_origin[3];
+			spv::Id ray_dir[3];
+
+			for (unsigned i = 0; i < 3; i++)
+			{
+				ray_origin[i] = impl.get_id_for_value(inst->getOperand(7 + i));
+				ray_dir[i] = impl.get_id_for_value(inst->getOperand(11 + i));
+			}
+
+			spv::Id tmin = impl.get_id_for_value(inst->getOperand(10));
+			spv::Id tmax = impl.get_id_for_value(inst->getOperand(14));
+
+			spv::Id ray_origin_vec = impl.build_vector(builder.makeFloatType(32), ray_origin, 3);
+			spv::Id ray_dir_vec = impl.build_vector(builder.makeFloatType(32), ray_dir, 3);
+
+			spv::Id attribute_id = emit_temp_storage_copy(impl, attributes, spv::StorageClassHitObjectAttributeNV);
+
+			spv::Id variable = impl.create_variable(spv::StorageClass::StorageClassPrivate, builder.makeHitObjectNVType());
+			impl.rewrite_value(hit_object_deferred_instruction->hit_object_handle, variable);
+
+			auto op = impl.allocate(hit_object_deferred_instruction->opcode == NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_HIT ?
+			                        spv::Op::OpHitObjectRecordHitNV :
+			                        spv::Op::OpHitObjectRecordHitWithIndexNV);
+			op->add_id(impl.get_id_for_value(hit_object));
+			op->add_id(acceleration_structure);
+			op->add_id(impl.get_id_for_value(instance_index));
+			op->add_id(impl.get_id_for_value(primitive_index));
+			op->add_id(impl.get_id_for_value(geometry_index));
+			op->add_id(impl.get_id_for_value(hit_kind));
+
+			if (hit_object_deferred_instruction->opcode == NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_HIT)
+			{
+				op->add_id(impl.get_id_for_value(hit_object_deferred_instruction->ray_contribution_to_hit_group_index));
+				op->add_id(impl.get_id_for_value(hit_object_deferred_instruction->multiplier_for_geometry_contribution_to_hit_group_index));
+			}
+			else
+			{
+				op->add_id(impl.get_id_for_value(hit_object_deferred_instruction->hit_group_record_index));
+			}
+
+			op->add_id(ray_origin_vec);
+			op->add_id(tmin);
+			op->add_id(ray_dir_vec);
+			op->add_id(tmax);
+			op->add_id(attribute_id);
+			impl.add(op);
+
+			// emit_temp_storage_resolve(impl, attributes, attribute_id);
+
+			return true;
+		}
+		case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_INVOKE:
+		{
+			auto *hit_object = hit_object_deferred_instruction->hit_object_handle;
+			auto *ray_payload = inst->getOperand(15);
+
+			bool needs_temp_copy = impl.get_needs_temp_storage_copy(ray_payload);
+			spv::Id ray_payload_var_id = needs_temp_copy
+				? emit_temp_storage_copy(impl, ray_payload, spv::StorageClassRayPayloadKHR)
+				: impl.get_id_for_value(ray_payload);
+
+			auto *op = impl.allocate(spv::Op::OpHitObjectExecuteShaderNV);
+			op->add_id(impl.get_id_for_value(hit_object));
+			op->add_id(ray_payload_var_id);
+			impl.add(op);
+
+			// In this instance, the ray_payload_var_id is our temp.
+			if (needs_temp_copy)
+				emit_temp_storage_resolve(impl, ray_payload, ray_payload_var_id);
+
+			return true;
+		}
+		default:
+		{
+			LOGE("Invalid NvShader opcode for this context: %u\n", hit_object_deferred_instruction->opcode);
+			return false;
+		}
+		}
+	}
+
 	spv::Id ray_origin[3];
 	spv::Id ray_dir[3];
 
@@ -257,6 +400,43 @@ bool emit_ray_tracing_ignore_hit(Converter::Impl &impl, const llvm::CallInst *)
 
 bool emit_ray_tracing_call_shader(Converter::Impl &impl, const llvm::CallInst *inst)
 {
+	auto it = impl.nvshader.hit_objects_by_trace_handles.find(inst->getOperand(1));
+	if (it != impl.nvshader.hit_objects_by_trace_handles.end())
+	{
+		auto *hit_object_deferred_instruction = it->second;
+
+		switch (hit_object_deferred_instruction->opcode)
+		{
+		case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_HIT:
+		case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_HIT_WITH_RECORD_INDEX:
+		{
+			hit_object_deferred_instruction->attributes = inst->getOperand(2);
+			return true;
+		}
+		case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_ATTRIBUTES:
+		{
+			auto *hit_object = hit_object_deferred_instruction->hit_object_handle;
+			auto *attributes = inst->getOperand(2);
+			spv::Id hit_object_attributes_id = emit_temp_storage_copy(impl, attributes,
+			                                                          spv::StorageClassHitObjectAttributeNV);
+
+			auto op = impl.allocate(spv::Op::OpHitObjectGetAttributesNV);
+			op->add_id(impl.get_id_for_value(hit_object));
+			op->add_id(hit_object_attributes_id);
+			impl.add(op);
+
+			emit_temp_storage_resolve(impl, attributes, hit_object_attributes_id);
+
+			return true;
+		}
+		default:
+		{
+			LOGE("Invalid NvShader opcode for this context: %u\n", hit_object_deferred_instruction->opcode);
+			return false;
+		}
+		}
+	}
+
 	auto *callable_data = inst->getOperand(2);
 
 	bool needs_temp_copy = impl.get_needs_temp_storage_copy(callable_data);

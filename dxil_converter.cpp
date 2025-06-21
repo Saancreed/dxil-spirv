@@ -5596,6 +5596,96 @@ static bool instruction_has_side_effects(const llvm::Instruction &instruction)
 	return false;
 }
 
+static spv::Id bitcast_nvshader_instruction_operand_to_float(Converter::Impl &impl, const LLVMBC::Value *op)
+{
+	auto *cast_inst = llvm::dyn_cast<llvm::CastInst>(op);
+
+	if (cast_inst && cast_inst->getOpcode() == llvm::Instruction::CastOps::BitCast)
+	{
+		op = cast_inst->getOperand(0);
+
+		if (op->getType()->getTypeID() == llvm::Type::TypeID::FloatTyID)
+			return impl.get_id_for_value(op);
+	}
+
+	auto *bitcast_op = impl.allocate(spv::OpBitcast, impl.builder().makeFloatType(32));
+	bitcast_op->add_id(impl.get_id_for_value(op));
+	impl.add(bitcast_op);
+
+	return bitcast_op->id;
+}
+
+static bool emit_get_hit_object_uint(Converter::Impl &impl, const llvm::CallInst *instruction,
+                                     const NvShaderInstruction &replacement, spv::Op opcode)
+{
+	assert(replacement.phase == 0);
+
+	auto *hit_object = replacement.inputs.at(76);
+	auto *op = impl.allocate(opcode, impl.get_id_for_value(instruction), impl.builder().makeUintType(32));
+	op->add_id(impl.get_id_for_value(hit_object));
+	impl.add(op);
+
+	return true;
+}
+
+static bool emit_get_hit_object_bool(Converter::Impl &impl, const llvm::CallInst *instruction,
+                                     const NvShaderInstruction &replacement, spv::Op opcode)
+{
+	assert(replacement.phase == 0);
+
+	auto &builder = impl.builder();
+
+	auto *hit_object = replacement.inputs.at(76);
+	auto *op = impl.allocate(opcode, builder.makeBoolType());
+	op->add_id(impl.get_id_for_value(hit_object));
+	impl.add(op);
+
+	// TODO: get rid of this select + notequal after
+	auto *select_op = impl.allocate(spv::OpSelect, impl.get_id_for_value(instruction), builder.makeUintType(32));
+	select_op->add_id(op->id);
+	select_op->add_id(builder.makeUintConstant(1));
+	select_op->add_id(builder.makeUintConstant(0));
+	impl.add(select_op);
+
+	return true;
+}
+
+static bool emit_get_hit_object_float(Converter::Impl &impl, const llvm::CallInst *instruction,
+                                      const NvShaderInstruction &replacement, spv::Op opcode)
+{
+	auto &builder = impl.builder();
+
+	auto *hit_object = replacement.inputs.at(76);
+
+	auto *op = impl.allocate(opcode, impl.get_id_for_value(instruction), builder.makeFloatType(32));
+	op->add_id(impl.get_id_for_value(hit_object));
+	impl.add(op);
+
+	return true;
+}
+
+static bool emit_get_hit_object_float(Converter::Impl &impl, const llvm::CallInst *instruction,
+                                      const NvShaderInstruction &replacement, spv::Op opcode,
+                                      uint32_t extract_index)
+{
+	auto &builder = impl.builder();
+
+	spv::Id float32 = builder.makeFloatType(32);
+
+	auto *hit_object = replacement.inputs.at(76);
+
+	auto *op = impl.allocate(opcode, builder.makeVectorType(float32, 3));
+	op->add_id(impl.get_id_for_value(hit_object));
+	impl.add(op);
+
+	auto *extract_op = impl.allocate(spv::OpCompositeExtract, impl.get_id_for_value(instruction), float32);
+	extract_op->add_id(op->id);
+	extract_op->add_literal(extract_index);
+	impl.add(extract_op);
+
+	return true;
+}
+
 bool emit_nvshader_instruction(Converter::Impl &impl, const llvm::CallInst *instruction,
                                const NvShaderInstruction &replacement)
 {
@@ -5644,6 +5734,257 @@ bool emit_nvshader_instruction(Converter::Impl &impl, const llvm::CallInst *inst
 
 		return true;
 	}
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_TRACE_RAY:
+	{
+		switch (replacement.phase)
+		{
+		case 0:
+		{
+			builder.addExtension("SPV_NV_shader_invocation_reorder");
+			builder.addCapability(spv::Capability::CapabilityShaderInvocationReorderNV);
+
+			NvShaderDeferredHitObjectInstruction hit_object_instruction;
+			hit_object_instruction.opcode = replacement.opcode;
+			hit_object_instruction.miss_shader_index = replacement.inputs.at(76);
+			hit_object_instruction.hit_object_handle = instruction;
+			impl.nvshader.hit_objects.emplace(replacement.initiating_inst,
+			                                  std::move(hit_object_instruction));
+
+			return true;
+		}
+		case 1:
+		{
+			auto *hit_object_instruction = &impl.nvshader.hit_objects.at(replacement.initiating_inst);
+			impl.nvshader.hit_objects_by_trace_handles.emplace(instruction, hit_object_instruction);
+
+			return true;
+		}
+		default:
+		{
+			LOGE("Invalid HitObject TraceRay output phase: %u.\n", replacement.phase);
+			return false;
+		}
+		}
+	}
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_HIT:
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_HIT_WITH_RECORD_INDEX:
+	{
+		switch (replacement.phase)
+		{
+		case 0:
+		{
+			builder.addExtension("SPV_NV_shader_invocation_reorder");
+			builder.addCapability(spv::Capability::CapabilityShaderInvocationReorderNV);
+
+			NvShaderDeferredHitObjectInstruction hit_object_instruction;
+			hit_object_instruction.opcode = replacement.opcode;
+			hit_object_instruction.instance_index = replacement.inputs.at(76);
+			hit_object_instruction.geometry_index = replacement.inputs.at(80);
+			hit_object_instruction.primitive_index = replacement.inputs.at(84);
+			hit_object_instruction.hit_kind = replacement.inputs.at(88);
+			if (replacement.opcode == NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_HIT)
+			{
+				hit_object_instruction.ray_contribution_to_hit_group_index = replacement.inputs.at(92);
+				hit_object_instruction.multiplier_for_geometry_contribution_to_hit_group_index = replacement.inputs.at(96);
+			}
+			else
+			{
+				hit_object_instruction.hit_group_record_index = replacement.inputs.at(92);
+			}
+			hit_object_instruction.hit_object_handle = instruction;
+			impl.nvshader.hit_objects.emplace(replacement.initiating_inst,
+			                                  std::move(hit_object_instruction));
+
+			return true;
+		}
+		case 1:
+		{
+			auto *hit_object_instruction = &impl.nvshader.hit_objects.at(replacement.initiating_inst);
+			impl.nvshader.hit_objects_by_trace_handles.emplace(instruction, hit_object_instruction);
+
+			return true;
+		}
+		default:
+		{
+			LOGE("Invalid HitObject MakeHit output phase: %u.\n", replacement.phase);
+			return false;
+		}
+		}
+	}
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_MISS:
+	{
+		assert(replacement.phase == 0);
+
+		builder.addExtension("SPV_NV_shader_invocation_reorder");
+		builder.addCapability(spv::Capability::CapabilityShaderInvocationReorderNV);
+
+		auto *index = replacement.inputs.at(76);
+		auto *tmin = replacement.inputs.at(80);
+		auto *tmax = replacement.inputs.at(84);
+		auto *origin_x = replacement.inputs.at(92);
+		auto *origin_y = replacement.inputs.at(96);
+		auto *origin_z = replacement.inputs.at(100);
+		auto *direction_x = replacement.inputs.at(108);
+		auto *direction_y = replacement.inputs.at(112);
+		auto *direction_z = replacement.inputs.at(116);
+
+		spv::Id ray_origin[3] = {
+			bitcast_nvshader_instruction_operand_to_float(impl, origin_x),
+			bitcast_nvshader_instruction_operand_to_float(impl, origin_y),
+			bitcast_nvshader_instruction_operand_to_float(impl, origin_z),
+		};
+		spv::Id ray_dir[3] = {
+			bitcast_nvshader_instruction_operand_to_float(impl, direction_x),
+			bitcast_nvshader_instruction_operand_to_float(impl, direction_y),
+			bitcast_nvshader_instruction_operand_to_float(impl, direction_z),
+		};
+
+		spv::Id float32 = builder.makeFloatType(32);
+		spv::Id ray_origin_vec = impl.build_vector(float32, ray_origin, 3);
+		spv::Id ray_dir_vec = impl.build_vector(float32, ray_dir, 3);
+
+		spv::Id variable = impl.create_variable(spv::StorageClass::StorageClassPrivate, builder.makeHitObjectNVType());
+		impl.rewrite_value(instruction, variable);
+
+		auto op = impl.allocate(spv::Op::OpHitObjectRecordMissNV);
+		op->add_id(variable);
+		op->add_id(impl.get_id_for_value(index));
+		op->add_id(ray_origin_vec);
+		op->add_id(bitcast_nvshader_instruction_operand_to_float(impl, tmin));
+		op->add_id(ray_dir_vec);
+		op->add_id(bitcast_nvshader_instruction_operand_to_float(impl, tmax));
+		impl.add(op);
+
+		return true;
+	}
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_REORDER_THREAD:
+	{
+		assert(replacement.phase == 0);
+
+		builder.addExtension("SPV_NV_shader_invocation_reorder");
+		builder.addCapability(spv::Capability::CapabilityShaderInvocationReorderNV);
+
+		auto *has_hit_object = llvm::dyn_cast<llvm::Constant>(replacement.inputs.at(76));
+
+		if (!has_hit_object)
+		{
+			LOGE("REORDER_THREAD hit object flag is not a constant.\n");
+			return false;
+		}
+
+		auto *hint = replacement.inputs.at(84);
+		auto *bits = replacement.inputs.at(88);
+
+		if (has_hit_object->getUniqueInteger().getZExtValue())
+		{
+			auto *hit_object = replacement.inputs.at(80);
+
+			auto *op = impl.allocate(spv::OpReorderThreadWithHitObjectNV);
+			op->add_id(impl.get_id_for_value(hit_object));
+			op->add_id(impl.get_id_for_value(hint));
+			op->add_id(impl.get_id_for_value(bits));
+			impl.add(op);
+		}
+		else
+		{
+			auto *op = impl.allocate(spv::OpReorderThreadWithHintNV);
+			op->add_id(impl.get_id_for_value(hint));
+			op->add_id(impl.get_id_for_value(bits));
+			impl.add(op);
+		}
+
+		return true;
+	}
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_INVOKE:
+	{
+		assert(replacement.phase == 0);
+
+		NvShaderDeferredHitObjectInstruction hit_object_instruction;
+		hit_object_instruction.opcode = replacement.opcode;
+		hit_object_instruction.hit_object_handle = replacement.inputs.at(76);
+		auto result = impl.nvshader.hit_objects.emplace(replacement.initiating_inst,
+		                                                std::move(hit_object_instruction));
+		impl.nvshader.hit_objects_by_trace_handles.emplace(instruction, &result.first->second);
+
+		return true;
+	}
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_IS_MISS:
+		return emit_get_hit_object_bool(impl, instruction, replacement, spv::OpHitObjectIsMissNV);
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_INSTANCE_ID:
+		return emit_get_hit_object_uint(impl, instruction, replacement, spv::OpHitObjectGetInstanceIdNV);
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_INSTANCE_INDEX:
+		return emit_get_hit_object_uint(impl, instruction, replacement, spv::OpHitObjectGetInstanceCustomIndexNV);
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_PRIMITIVE_INDEX:
+		return emit_get_hit_object_uint(impl, instruction, replacement, spv::OpHitObjectGetPrimitiveIndexNV);
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_GEOMETRY_INDEX:
+		return emit_get_hit_object_uint(impl, instruction, replacement, spv::OpHitObjectGetGeometryIndexNV);
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_HIT_KIND:
+		return emit_get_hit_object_uint(impl, instruction, replacement, spv::OpHitObjectGetHitKindNV);
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_RAY_DESC:
+	{
+		switch (replacement.phase)
+		{
+		case 0:
+			return emit_get_hit_object_float(impl, instruction, replacement, spv::OpHitObjectGetRayTMinNV);
+		case 1:
+			return emit_get_hit_object_float(impl, instruction, replacement, spv::OpHitObjectGetRayTMaxNV);
+		case 2:
+		case 3:
+		case 4:
+			return emit_get_hit_object_float(impl, instruction, replacement,
+			                                 spv::OpHitObjectGetWorldRayOriginNV, replacement.phase - 2);
+		case 5:
+		case 6:
+		case 7:
+			return emit_get_hit_object_float(impl, instruction, replacement,
+			                                 spv::OpHitObjectGetWorldRayDirectionNV, replacement.phase - 5);
+		default:
+		{
+			LOGE("Invalid HitObject GetRayDesc output phase: %u.\n", replacement.phase);
+			return false;
+		}
+		}
+	}
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_ATTRIBUTES:
+	{
+		assert(replacement.phase == 0);
+
+		NvShaderDeferredHitObjectInstruction hit_object_instruction;
+		hit_object_instruction.opcode = replacement.opcode;
+		hit_object_instruction.hit_object_handle = replacement.inputs.at(76);
+		auto result = impl.nvshader.hit_objects.emplace(replacement.initiating_inst,
+		                                                std::move(hit_object_instruction));
+		impl.nvshader.hit_objects_by_trace_handles.emplace(instruction, &result.first->second);
+
+		return true;
+	}
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_SHADER_TABLE_INDEX:
+		return emit_get_hit_object_uint(impl, instruction, replacement, spv::OpHitObjectGetShaderBindingTableRecordIndexNV);
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_LOAD_LOCAL_ROOT_TABLE_CONSTANT:
+	{
+		LOGE("Unsupported NvShader opcode: NV_EXTN_OP_HIT_OBJECT_LOAD_LOCAL_ROOT_TABLE_CONSTANT.\n");
+		return false;
+	}
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_IS_HIT:
+		return emit_get_hit_object_bool(impl, instruction, replacement, spv::OpHitObjectIsHitNV);
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_IS_NOP:
+		return emit_get_hit_object_bool(impl, instruction, replacement, spv::OpHitObjectIsEmptyNV);
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_MAKE_NOP:
+	{
+		assert(replacement.phase == 0);
+
+		builder.addExtension("SPV_NV_shader_invocation_reorder");
+		builder.addCapability(spv::Capability::CapabilityShaderInvocationReorderNV);
+
+		spv::Id variable = impl.create_variable(spv::StorageClass::StorageClassPrivate, builder.makeHitObjectNVType());
+		impl.rewrite_value(instruction, variable);
+
+		auto op = impl.allocate(spv::Op::OpHitObjectRecordEmptyNV);
+		op->add_id(variable);
+		impl.add(op);
+
+		return true;
+	}
 	case NvShaderOpcode::NV_EXTN_OP_RT_GET_CLUSTER_ID:
 	{
 		assert(replacement.phase == 0);
@@ -5669,6 +6010,13 @@ bool emit_nvshader_instruction(Converter::Impl &impl, const llvm::CallInst *inst
 		auto *ray_flags = llvm::cast<llvm::CallInst>(replacement.inputs.at(76));
 		return emit_ray_query_get_value_instruction(impl, instruction, ray_flags, spv::OpRayQueryGetClusterIdNV, 1,
 													static_cast<spv::RayQueryIntersection>(replacement.opcode % 2));
+	}
+	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_GET_CLUSTER_ID:
+	{
+		builder.addExtension("SPV_NV_cluster_acceleration_structure");
+		builder.addCapability(spv::Capability::CapabilityRayTracingClusterAccelerationStructureNV);
+
+		return emit_get_hit_object_uint(impl, instruction, replacement, spv::OpHitObjectGetClusterIdNV);
 	}
 	default:
 	{

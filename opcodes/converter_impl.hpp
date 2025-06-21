@@ -371,6 +371,8 @@ struct Converter::Impl
 		uint32_t current_phase = 0;
 
 		UnorderedMap<const llvm::Value *, NvShaderInstruction> replacements;
+		UnorderedMap<const llvm::CallInst *, NvShaderDeferredHitObjectInstruction> hit_objects;
+		UnorderedMap<const llvm::Value *, NvShaderDeferredHitObjectInstruction *> hit_objects_by_trace_handles;
 	} nvshader;
 
 	// DXIL has no storage class concept for hit/callable/payload types.
