@@ -5602,6 +5602,74 @@ bool emit_nvshader_instruction(Converter::Impl &impl, const llvm::CallInst *inst
 	auto &builder = impl.builder();
 	switch (replacement.opcode)
 	{
+	case NvShaderOpcode::NV_EXTN_OP_GET_SPECIAL:
+	{
+		auto *subopcode = llvm::dyn_cast<llvm::Constant>(replacement.inputs.at(76));
+
+		if (!subopcode)
+		{
+			LOGE("GET_SPECIAL subopcode is not a constant.\n");
+			return false;
+		}
+
+		auto subopcode_value = static_cast<NvShaderGetSpecialSubOpCode>(subopcode->getUniqueInteger().getZExtValue());
+
+		switch (subopcode_value)
+		{
+		case NvShaderGetSpecialSubOpCode::NV_SPECIALOP_GLOBAL_TIMER_LO:
+		case NvShaderGetSpecialSubOpCode::NV_SPECIALOP_GLOBAL_TIMER_HI:
+		{
+			assert(replacement.phase == 0);
+
+			builder.addExtension("SPV_KHR_shader_clock");
+			builder.addCapability(spv::Capability::CapabilityShaderClockKHR);
+
+			auto *read_op = impl.allocate(spv::OpReadClockKHR, builder.makeVectorType(builder.makeUintType(32), 2));
+			read_op->add_id(builder.makeUintConstant(1));
+			impl.add(read_op);
+
+			auto *extract_op = impl.allocate(spv::OpCompositeExtract, impl.get_id_for_value(instruction), builder.makeUintType(32));
+			extract_op->add_id(read_op->id);
+			extract_op->add_literal(subopcode_value - NvShaderGetSpecialSubOpCode::NV_SPECIALOP_GLOBAL_TIMER_LO);
+			impl.add(extract_op);
+
+			return true;
+		}
+		default:
+		{
+			LOGE("Unsupported NvShader GET_SPECIAL subopcode: %u.\n", subopcode_value);
+			return false;
+		}
+		}
+
+		return true;
+	}
+	case NvShaderOpcode::NV_EXTN_OP_RT_GET_CLUSTER_ID:
+	{
+		assert(replacement.phase == 0);
+
+		builder.addExtension("SPV_NV_cluster_acceleration_structure");
+		builder.addCapability(spv::Capability::CapabilityRayTracingClusterAccelerationStructureNV);
+
+		spv::Id input = impl.spirv_module.get_builtin_shader_input(spv::BuiltIn::BuiltInClusterIDNV);
+		auto *load_op = impl.allocate(spv::OpLoad, impl.get_id_for_value(instruction), builder.makeUintType(32));
+		load_op->add_id(input);
+		impl.add(load_op);
+
+		return true;
+	}
+	case NvShaderOpcode::NV_EXTN_OP_RT_GET_CANDIDATE_CLUSTER_ID:
+	case NvShaderOpcode::NV_EXTN_OP_RT_GET_COMMITTED_CLUSTER_ID:
+	{
+		assert(replacement.phase == 0);
+
+		builder.addExtension("SPV_NV_cluster_acceleration_structure");
+		builder.addCapability(spv::Capability::CapabilityRayTracingClusterAccelerationStructureNV);
+
+		auto *ray_flags = llvm::cast<llvm::CallInst>(replacement.inputs.at(76));
+		return emit_ray_query_get_value_instruction(impl, instruction, ray_flags, spv::OpRayQueryGetClusterIdNV, 1,
+													static_cast<spv::RayQueryIntersection>(replacement.opcode % 2));
+	}
 	default:
 	{
 		LOGE("Unsupported NvShader opcode: %u.\n", replacement.opcode);

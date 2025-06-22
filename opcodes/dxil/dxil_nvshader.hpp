@@ -39,6 +39,16 @@ namespace dxil_spv
 enum NvShaderOpcode
 {
 	NV_EXTN_OP_NONE = 0,
+	NV_EXTN_OP_GET_SPECIAL = 19,
+	NV_EXTN_OP_RT_GET_CLUSTER_ID = 93,
+	NV_EXTN_OP_RT_GET_CANDIDATE_CLUSTER_ID = 94,
+	NV_EXTN_OP_RT_GET_COMMITTED_CLUSTER_ID = 95,
+};
+
+enum NvShaderGetSpecialSubOpCode
+{
+	NV_SPECIALOP_GLOBAL_TIMER_LO = 9,
+	NV_SPECIALOP_GLOBAL_TIMER_HI = 10,
 };
 
 struct NvShaderInstruction

@@ -1169,6 +1169,17 @@ bool analyze_dxil_instruction(Converter::Impl &impl, const llvm::CallInst *instr
 				nvshader.num_instructions = nvshader_num_instructions_from_opcode(nvshader.active_opcode);
 				nvshader.current_phase = 0;
 				nvshader.reading_inputs = false;
+
+				switch (nvshader.active_opcode)
+				{
+				case NV_EXTN_OP_GET_SPECIAL:
+				case NV_EXTN_OP_RT_GET_CANDIDATE_CLUSTER_ID:
+				case NV_EXTN_OP_RT_GET_COMMITTED_CLUSTER_ID:
+					nvshader.fakes.all.insert(nvshader.active_inputs.at(76));
+					break;
+				default:
+					break;
+				}
 			}
 			else if (++nvshader.current_phase >= nvshader.num_instructions)
 			{

@@ -31,6 +31,12 @@ uint32_t nvshader_num_instructions_from_opcode(NvShaderOpcode opcode)
 {
 	switch (opcode)
 	{
+	case NvShaderOpcode::NV_EXTN_OP_GET_SPECIAL:
+		return 1;
+	case NvShaderOpcode::NV_EXTN_OP_RT_GET_CLUSTER_ID:
+	case NvShaderOpcode::NV_EXTN_OP_RT_GET_CANDIDATE_CLUSTER_ID:
+	case NvShaderOpcode::NV_EXTN_OP_RT_GET_COMMITTED_CLUSTER_ID:
+		return 1;
 	default:
 		LOGE("Unsupported NvShader opcode: %u.\n", opcode);
 		return 0;
