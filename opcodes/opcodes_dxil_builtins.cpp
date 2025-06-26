@@ -1177,6 +1177,9 @@ bool analyze_dxil_instruction(Converter::Impl &impl, const llvm::CallInst *instr
 				case NV_EXTN_OP_RT_GET_COMMITTED_CLUSTER_ID:
 					nvshader.fakes.all.insert(nvshader.active_inputs.at(76));
 					break;
+				case NV_EXTN_OP_HIT_OBJECT_LOAD_LOCAL_ROOT_TABLE_CONSTANT:
+					nvshader.hit_object_srb = true;
+					break;
 				default:
 					break;
 				}

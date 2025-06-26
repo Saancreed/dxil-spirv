@@ -373,6 +373,9 @@ struct Converter::Impl
 		UnorderedMap<const llvm::Value *, NvShaderInstruction> replacements;
 		UnorderedMap<const llvm::CallInst *, NvShaderDeferredHitObjectInstruction> hit_objects;
 		UnorderedMap<const llvm::Value *, NvShaderDeferredHitObjectInstruction *> hit_objects_by_trace_handles;
+		bool hit_object_srb = false;
+		spv::Id hit_object_srb_pointer_type_id = 0;
+		spv::Id hit_object_srb_member_pointer_type_id = 0;
 	} nvshader;
 
 	// DXIL has no storage class concept for hit/callable/payload types.

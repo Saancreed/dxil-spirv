@@ -2600,6 +2600,22 @@ bool Converter::Impl::emit_shader_record_buffer()
 	spv::Id type_id = emit_shader_record_buffer_block_type(false);
 	if (type_id)
 		shader_record_buffer_id = create_variable(spv::StorageClassShaderRecordBufferKHR, type_id, "SBT");
+	if (nvshader.hit_object_srb)
+	{
+		auto &builder = spirv_module.get_builder();
+
+		spv::Id uint_id = builder.makeUintType(32);
+		spv::Id srb_struct_id = builder.makeStructType({ uint_id }, "HitObjectSRB");
+
+		builder.addDecoration(srb_struct_id, spv::DecorationBlock);
+		builder.addDecoration(srb_struct_id, spv::DecorationHitObjectShaderRecordBufferNV);
+
+		builder.addMemberDecoration(srb_struct_id, 0, spv::DecorationOffset, 0);
+		builder.addMemberDecoration(srb_struct_id, 0, spv::DecorationNonWritable);
+
+		nvshader.hit_object_srb_pointer_type_id = builder.makePointer(spv::StorageClassPhysicalStorageBuffer, srb_struct_id);
+		nvshader.hit_object_srb_member_pointer_type_id = builder.makePointer(spv::StorageClassPhysicalStorageBuffer, uint_id);
+	}
 	return true;
 }
 
@@ -5962,8 +5978,52 @@ bool emit_nvshader_instruction(Converter::Impl &impl, const llvm::CallInst *inst
 		return emit_get_hit_object_uint(impl, instruction, replacement, spv::OpHitObjectGetShaderBindingTableRecordIndexNV);
 	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_LOAD_LOCAL_ROOT_TABLE_CONSTANT:
 	{
-		LOGE("Unsupported NvShader opcode: NV_EXTN_OP_HIT_OBJECT_LOAD_LOCAL_ROOT_TABLE_CONSTANT.\n");
-		return false;
+		assert(replacement.phase == 0);
+
+		auto *hit_object = replacement.inputs.at(76);
+		auto *offset = replacement.inputs.at(80);
+
+		spv::Id uint_type_id = builder.makeUintType(32);
+		spv::Id ulong_type_id = builder.makeUintType(64);
+
+		auto *op = impl.allocate(spv::OpHitObjectGetShaderRecordBufferHandleNV, builder.makeVectorType(uint_type_id, 2));
+		op->add_id(impl.get_id_for_value(hit_object));
+		impl.add(op);
+
+		auto *convert_op = impl.allocate(spv::OpUConvert, builder.makeVectorType(ulong_type_id, 2));
+		convert_op->add_id(op->id);
+		impl.add(convert_op);
+
+		auto *extract_op = impl.allocate(spv::OpCompositeExtract, ulong_type_id);
+		extract_op->add_id(convert_op->id);
+		extract_op->add_literal(0);
+		impl.add(extract_op);
+
+		convert_op = impl.allocate(spv::OpUConvert, ulong_type_id);
+		convert_op->add_id(impl.get_id_for_value(offset));
+		impl.add(convert_op);
+
+		auto *add_op = impl.allocate(spv::OpIAdd, ulong_type_id);
+		add_op->add_id(extract_op->id);
+		add_op->add_id(convert_op->id);
+		impl.add(add_op);
+
+		convert_op = impl.allocate(spv::OpConvertUToPtr, impl.nvshader.hit_object_srb_pointer_type_id);
+		convert_op->add_id(add_op->id);
+		impl.add(convert_op);
+
+		auto *chain_op = impl.allocate(spv::OpAccessChain, impl.nvshader.hit_object_srb_member_pointer_type_id);
+		chain_op->add_id(convert_op->id);
+		chain_op->add_id(builder.makeUintConstant(0));
+		impl.add(chain_op);
+
+		auto *load_op = impl.allocate(spv::OpLoad, impl.get_id_for_value(instruction), uint_type_id);
+		load_op->add_id(chain_op->id);
+		load_op->add_literal(spv::MemoryAccessAlignedMask);
+		load_op->add_literal(sizeof(uint32_t));
+		impl.add(load_op);
+
+		return true;
 	}
 	case NvShaderOpcode::NV_EXTN_OP_HIT_OBJECT_IS_HIT:
 		return emit_get_hit_object_bool(impl, instruction, replacement, spv::OpHitObjectIsHitNV);
