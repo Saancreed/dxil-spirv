@@ -48,8 +48,20 @@ struct NVAPIState
 	spv::Id fake_doorbell_outputs[NVAPI_ARGUMENT_COUNT] = {};
 	const llvm::Value *marked_uav = nullptr;
 
-	spv::Id hit_object_srb_ptr = 0;
-	spv::Id hit_object_srb_member_ptr = 0;
+	struct
+	{
+		spv::Id srb_ptr = 0;
+		spv::Id srb_member_ptr = 0;
+		struct PayloadMapping
+		{
+			spv::Id var_id = 0;
+			const llvm::PHINode *consuming_phi = nullptr;
+		};
+		UnorderedSet<const llvm::Value *> payloads;
+		UnorderedMap<const llvm::PHINode *, PayloadMapping> payload_mapping;
+		UnorderedMap<const llvm::Value *, const llvm::PHINode *> payload_to_consuming_phi;
+		Operation *last_record_op = nullptr;
+	} hit_object;
 
 	unsigned deferred_opcode = 0;
 
@@ -86,4 +98,8 @@ bool emit_nvapi_buffer_load(Converter::Impl &impl, const llvm::CallInst *instruc
 bool emit_nvapi_buffer_store(Converter::Impl &impl, const llvm::CallInst *instruction, spv::Id id);
 
 bool emit_nvapi_resource_uav_handle(Converter::Impl &impl, const llvm::CallInst *instruction, uint32_t resource_range);
+
+bool is_hitobject_nv_phi(Converter::Impl &impl, const llvm::PHINode *instruction);
+bool analyze_phi_hitobject_nv(Converter::Impl &impl, const llvm::PHINode *instruction);
+bool emit_hitobject_nv_phi(Converter::Impl &impl, const llvm::PHINode *instruction);
 }

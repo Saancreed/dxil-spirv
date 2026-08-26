@@ -8,6 +8,7 @@
 #include "dxil_ray_tracing.hpp"
 #include "opcodes/converter_impl.hpp"
 #include "logging.hpp"
+#include <limits>
 
 namespace dxil_spv
 {
@@ -97,6 +98,8 @@ enum NVSpecialOp
 	NV_SPECIALOP_GLOBAL_TIMER_HI = 10
 };
 
+static const spv::Id hit_object_nv_sentinel = std::numeric_limits<spv::Id>::max() - NV_EXTN_OP_HIT_OBJECT_TRACE_RAY;
+
 void NVAPIState::reset()
 {
 	for (auto &input : fake_doorbell_inputs)
@@ -107,10 +110,29 @@ void NVAPIState::reset()
 		output = 0;
 
 	doorbell = nullptr;
+	hit_object.last_record_op = nullptr;
 	deferred_opcode = 0;
 	clock_output_index = 0;
 	num_expected_clock_outputs = 0;
 	// The marked UAV persists.
+}
+
+static spv::Id build_hit_object_nv(Converter::Impl &impl, const llvm::Value *instruction)
+{
+	auto itr = impl.nvapi.hit_object.payload_to_consuming_phi.find(instruction);
+	if (itr != impl.nvapi.hit_object.payload_to_consuming_phi.end())
+	{
+		auto *mapping = &impl.nvapi.hit_object.payload_mapping[itr->second];
+		while (mapping->consuming_phi)
+			mapping = &impl.nvapi.hit_object.payload_mapping[mapping->consuming_phi];
+		if (!mapping->var_id)
+			mapping->var_id = impl.create_variable(spv::StorageClassFunction, impl.builder().makeHitObjectNVType());
+		return mapping->var_id;
+	}
+	else
+	{
+		return impl.create_variable(spv::StorageClassFunction, impl.builder().makeHitObjectNVType());
+	}
 }
 
 void NVAPIState::notify_doorbell(Converter::Impl &impl, const llvm::CallInst *instruction, bool analysis)
@@ -131,12 +153,49 @@ void NVAPIState::notify_doorbell(Converter::Impl &impl, const llvm::CallInst *in
 
 		if (clock_output_index < num_expected_clock_outputs)
 		{
+			if (clock_output_index == 0 && fake_doorbell_inputs[NVAPI_ARGUMENT_OPCODE])
+			{
+				if (auto *c = llvm::dyn_cast<llvm::ConstantInt>(fake_doorbell_inputs[NVAPI_ARGUMENT_OPCODE]))
+				{
+					switch (uint32_t(c->getUniqueInteger().getZExtValue()))
+					{
+					case NV_EXTN_OP_HIT_OBJECT_TRACE_RAY:
+					case NV_EXTN_OP_HIT_OBJECT_MAKE_HIT:
+					case NV_EXTN_OP_HIT_OBJECT_MAKE_HIT_WITH_RECORD_INDEX:
+					case NV_EXTN_OP_HIT_OBJECT_MAKE_MISS:
+					case NV_EXTN_OP_HIT_OBJECT_MAKE_NOP:
+						// Track instructions recording HitObjectsNV, we'll need this for PHI shenanigans
+						LOGE("%p is a hit object (%u).\n", instruction, uint32_t(c->getUniqueInteger().getZExtValue()));
+						impl.nvapi.hit_object.payloads.insert(instruction);
+						break;
+					}
+				}
+			}
+
 			// Deferred instructions will consume the outputs, emitting SPIR-V and rewriting
 			// values as needed when the last fake CallShader/TraceRay call is encountered
 			if (deferred_opcode)
 				fake_doorbell_intermediates[clock_output_index] = instruction;
 			else if (!analysis)
+			{
+				if (impl.nvapi.fake_doorbell_outputs[clock_output_index] == hit_object_nv_sentinel)
+				{
+					auto *record_op = impl.nvapi.hit_object.last_record_op;
+
+					assert(record_op);
+					assert(record_op->arguments[0] == hit_object_nv_sentinel);
+					assert(record_op->op == spv::OpHitObjectRecordMissNV
+						|| record_op->op == spv::OpHitObjectRecordEmptyNV);
+
+					spv::Id variable = build_hit_object_nv(impl, instruction);
+
+					LOGE("Remapping ID for hit object %p: %u -> %u.\n", instruction, impl.nvapi.fake_doorbell_outputs[clock_output_index], variable);
+
+					impl.nvapi.fake_doorbell_outputs[clock_output_index] = record_op->arguments[0] = variable;
+				}
+
 				impl.rewrite_value(instruction, impl.nvapi.fake_doorbell_outputs[clock_output_index]);
+			}
 			clock_output_index++;
 		}
 
@@ -318,7 +377,7 @@ static bool emit_nvapi_extn_op_hit_object_trace_ray(Converter::Impl &impl, const
 		? emit_temp_storage_copy(impl, ray_payload, spv::StorageClassRayPayloadKHR)
 		: impl.get_id_for_value(ray_payload);
 
-	spv::Id variable = impl.create_variable(spv::StorageClassFunction, builder.makeHitObjectNVType());
+	spv::Id variable = build_hit_object_nv(impl, hit_object);
 
 	auto op = impl.allocate(spv::OpHitObjectTraceRayNV);
 	op->add_id(variable);
@@ -334,6 +393,8 @@ static bool emit_nvapi_extn_op_hit_object_trace_ray(Converter::Impl &impl, const
 	op->add_id(tmax);
 	op->add_id(ray_payload_var_id);
 	impl.add(op);
+
+	// impl.nvapi.hit_object.last_record_op = op;
 
 	if (needs_temp_copy)
 		emit_temp_storage_resolve(impl, ray_payload, ray_payload_var_id);
@@ -392,7 +453,7 @@ static bool emit_nvapi_extn_op_hit_object_make_hit(Converter::Impl &impl, const 
 		? emit_temp_storage_copy(impl, attributes, spv::StorageClassHitObjectAttributeNV)
 		: impl.get_id_for_value(attributes);
 
-	spv::Id variable = impl.create_variable(spv::StorageClassFunction, builder.makeHitObjectNVType());
+	spv::Id variable = build_hit_object_nv(impl, hit_object);
 
 	auto op = impl.allocate(with_index ? spv::OpHitObjectRecordHitWithIndexNV : spv::OpHitObjectRecordHitNV);
 	op->add_id(variable);
@@ -416,6 +477,8 @@ static bool emit_nvapi_extn_op_hit_object_make_hit(Converter::Impl &impl, const 
 	op->add_id(tmax);
 	op->add_id(attribute_var_id);
 	impl.add(op);
+
+	// impl.nvapi.hit_object.last_record_op = op;
 
 	impl.rewrite_value(hit_object, variable);
 	return true;
@@ -445,10 +508,10 @@ static bool emit_nvapi_extn_op_hit_object_make_miss(Converter::Impl &impl)
 	spv::Id ray_origin_vec = impl.build_vector(float32, ray_origin, 3);
 	spv::Id ray_dir_vec = impl.build_vector(float32, ray_dir, 3);
 
-	spv::Id variable = impl.create_variable(spv::StorageClassFunction, builder.makeHitObjectNVType());
+	// spv::Id variable = impl.create_variable(spv::StorageClassFunction, builder.makeHitObjectNVType());
 
 	auto op = impl.allocate(spv::OpHitObjectRecordMissNV);
-	op->add_id(variable);
+	op->add_id(hit_object_nv_sentinel);
 	op->add_id(index);
 	op->add_id(ray_origin_vec);
 	op->add_id(tmin);
@@ -456,7 +519,9 @@ static bool emit_nvapi_extn_op_hit_object_make_miss(Converter::Impl &impl)
 	op->add_id(tmax);
 	impl.add(op);
 
-	impl.nvapi.fake_doorbell_outputs[0] = variable;
+	impl.nvapi.hit_object.last_record_op = op;
+
+	impl.nvapi.fake_doorbell_outputs[0] = hit_object_nv_sentinel;
 	return true;
 }
 
@@ -687,7 +752,7 @@ static bool emit_nvapi_extn_op_hit_object_load_local_root_table_constant(Convert
 
 	spv::Id uint32 = builder.makeUintType(32);
 
-	if (!impl.nvapi.hit_object_srb_ptr)
+	if (!impl.nvapi.hit_object.srb_ptr)
 	{
 		spv::Id srb_array = builder.makeRuntimeArray(uint32);
 		builder.addDecoration(srb_array, spv::DecorationArrayStride, sizeof(uint32_t));
@@ -700,15 +765,15 @@ static bool emit_nvapi_extn_op_hit_object_load_local_root_table_constant(Convert
 		builder.addMemberDecoration(srb_struct, 0, spv::DecorationOffset, 0);
 		builder.addMemberDecoration(srb_struct, 0, spv::DecorationNonWritable);
 
-		impl.nvapi.hit_object_srb_ptr = builder.makePointer(spv::StorageClassPhysicalStorageBuffer, srb_struct);
-		impl.nvapi.hit_object_srb_member_ptr = builder.makePointer(spv::StorageClassPhysicalStorageBuffer, uint32);
+		impl.nvapi.hit_object.srb_ptr = builder.makePointer(spv::StorageClassPhysicalStorageBuffer, srb_struct);
+		impl.nvapi.hit_object.srb_member_ptr = builder.makePointer(spv::StorageClassPhysicalStorageBuffer, uint32);
 	}
 
 	auto *op = impl.allocate(spv::OpHitObjectGetShaderRecordBufferHandleNV, builder.makeVectorType(uint32, 2));
 	op->add_id(hit_object);
 	impl.add(op);
 
-	auto *cast_op = impl.allocate(spv::OpBitcast, impl.nvapi.hit_object_srb_ptr);
+	auto *cast_op = impl.allocate(spv::OpBitcast, impl.nvapi.hit_object.srb_ptr);
 	cast_op->add_id(op->id);
 	impl.add(cast_op);
 
@@ -717,7 +782,7 @@ static bool emit_nvapi_extn_op_hit_object_load_local_root_table_constant(Convert
 	index_op->add_id(builder.makeUintConstant(2));
 	impl.add(index_op);
 
-	auto *chain_op = impl.allocate(spv::OpInBoundsAccessChain, impl.nvapi.hit_object_srb_member_ptr);
+	auto *chain_op = impl.allocate(spv::OpInBoundsAccessChain, impl.nvapi.hit_object.srb_member_ptr);
 	chain_op->add_id(cast_op->id);
 	chain_op->add_id(builder.makeUintConstant(0));
 	chain_op->add_id(index_op->id);
@@ -740,13 +805,15 @@ static bool emit_nvapi_extn_op_hit_object_make_nop(Converter::Impl &impl)
 	builder.addExtension("SPV_NV_shader_invocation_reorder");
 	builder.addCapability(spv::CapabilityShaderInvocationReorderNV);
 
-	spv::Id variable = impl.create_variable(spv::StorageClassFunction, builder.makeHitObjectNVType());
+	// spv::Id variable = impl.create_variable(spv::StorageClassFunction, builder.makeHitObjectNVType());
 
 	auto op = impl.allocate(spv::OpHitObjectRecordEmptyNV);
-	op->add_id(variable);
+	op->add_id(hit_object_nv_sentinel);
 	impl.add(op);
 
-	impl.nvapi.fake_doorbell_outputs[0] = variable;
+	impl.nvapi.hit_object.last_record_op = op;
+
+	impl.nvapi.fake_doorbell_outputs[0] = hit_object_nv_sentinel;
 	return true;
 }
 
@@ -1345,6 +1412,90 @@ bool emit_nvapi_buffer_store(Converter::Impl &impl, const llvm::CallInst *instru
 			return impl.nvapi.write_arguments_from_store(impl, instruction, false);
 		else
 			return impl.nvapi.mark_uav_write(instruction);
+	}
+
+	return false;
+}
+
+bool is_hitobject_nv_phi(Converter::Impl &impl, const llvm::PHINode *instruction)
+{
+	if (!impl.options.nvapi.enabled)
+		return false;
+
+	unsigned num_blocks = instruction->getNumIncomingValues();
+	for (unsigned i = 0; i < num_blocks; i++)
+	{
+		auto *incoming = instruction->getIncomingValue(i);
+
+		if (auto *call_inst = llvm::dyn_cast<llvm::CallInst>(incoming))
+		{
+			if (impl.nvapi.hit_object.payloads.find(call_inst) != impl.nvapi.hit_object.payloads.end())
+			{
+				LOGE("Hit object detected, propagating %p -> %p.\n", call_inst, instruction);
+				return true;
+			}
+		}
+		else if (auto *phi_inst = llvm::dyn_cast<llvm::PHINode>(incoming))
+		{
+			if (impl.nvapi.hit_object.payload_mapping.find(phi_inst) != impl.nvapi.hit_object.payload_mapping.end())
+			{
+				LOGE("Hit object phi detected, propagating %p -> %p.\n", phi_inst, instruction);
+				return true;
+			}
+		}
+	}
+
+	LOGE("Phi %p is not a hit object.\n", instruction);
+	return false;
+}
+
+bool analyze_phi_hitobject_nv(Converter::Impl &impl, const llvm::PHINode *instruction)
+{
+	unsigned num_blocks = instruction->getNumIncomingValues();
+	for (unsigned i = 0; i < num_blocks; i++)
+	{
+		auto *incoming = instruction->getIncomingValue(i);
+
+		if (auto *call_inst = llvm::dyn_cast<llvm::CallInst>(incoming))
+		{
+			auto &mapping = impl.nvapi.hit_object.payload_to_consuming_phi[call_inst];
+			if (mapping && mapping != instruction)
+			{
+				LOGE("A hitobjectNV is used as input to multiple PHI nodes.\n");
+				return false;
+			}
+			mapping = instruction;
+		}
+		else if (auto *phi_inst = llvm::dyn_cast<llvm::PHINode>(incoming))
+		{
+			auto &mapping = impl.nvapi.hit_object.payload_mapping[phi_inst];
+			if (mapping.consuming_phi && mapping.consuming_phi != instruction)
+			{
+				LOGE("A phi hitobjectNV is used as input to multiple PHI nodes.\n");
+				return false;
+			}
+			mapping.consuming_phi = instruction;
+		}
+	}
+
+	impl.nvapi.hit_object.payload_mapping[instruction] = {};
+	return true;
+}
+
+bool emit_hitobject_nv_phi(Converter::Impl &impl, const llvm::PHINode *instruction)
+{
+	auto itr = impl.nvapi.hit_object.payload_mapping.find(instruction);
+	if (itr != impl.nvapi.hit_object.payload_mapping.end())
+	{
+		auto *mapping = &itr->second;
+		while (mapping->consuming_phi)
+			mapping = &impl.nvapi.hit_object.payload_mapping[mapping->consuming_phi];
+
+		if (!mapping->var_id)
+			mapping->var_id = impl.create_variable(spv::StorageClassFunction, impl.builder().makeHitObjectNVType());
+
+		impl.rewrite_value(instruction, mapping->var_id);
+		return true;
 	}
 
 	return false;

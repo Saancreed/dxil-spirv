@@ -6252,6 +6252,9 @@ bool Converter::Impl::emit_phi_instruction(CFGNode *block, const llvm::PHINode &
 	if (emit_hitobject_phi(*this, &instruction))
 		return true;
 
+	if (emit_hitobject_nv_phi(*this, &instruction))
+		return true;
+
 	if (count == 1)
 	{
 		// Degenerate PHI. Seems to happen in some bizarre cases with lcssa passes?

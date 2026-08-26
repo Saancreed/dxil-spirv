@@ -2571,6 +2571,11 @@ bool analyze_phi_instruction(Converter::Impl &impl, const llvm::PHINode *instruc
 		if (struct_type->hasName() && struct_type->getName() == "dx.types.HitObject")
 			return analyze_phi_hitobject(impl, instruction);
 	}
+	else if (const auto *int_type = llvm::dyn_cast<llvm::IntegerType>(instruction->getType()))
+	{
+		if (int_type->getBitWidth() == 32 && is_hitobject_nv_phi(impl, instruction))
+			return analyze_phi_hitobject_nv(impl, instruction);
+	}
 
 	return true;
 }
