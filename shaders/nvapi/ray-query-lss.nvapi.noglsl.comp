@@ -20,8 +20,7 @@ void main(uint thr : SV_GroupIndex)
 	while (q.Proceed())
 	{
 		RWBool[2 * thr + 0] = NvRtCandidateIsNonOpaqueLss(q);
-		float2x4 position_and_radii;
-		position_and_radii = NvRtCandidateLssObjectPositionsAndRadii(q);
+		float2x4 position_and_radii = NvRtCandidateLssObjectPositionsAndRadii(q);
 		RWFloat[0] = position_and_radii[0][0];
 		RWFloat[1] = position_and_radii[0][1];
 		RWFloat[2] = position_and_radii[0][2];
@@ -37,8 +36,7 @@ void main(uint thr : SV_GroupIndex)
 	if (q.CommittedStatus())
 	{
 		RWBool[2 * thr + 1] = NvRtCommittedIsLss(q);
-		float2x4 position_and_radii;
-		position_and_radii = NvRtCommittedLssObjectPositionsAndRadii(q);
+		float2x4 position_and_radii = NvRtCommittedLssObjectPositionsAndRadii(q);
 		RWFloat[0] = position_and_radii[0][0];
 		RWFloat[1] = position_and_radii[0][1];
 		RWFloat[2] = position_and_radii[0][2];
