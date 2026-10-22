@@ -46,18 +46,4 @@ void main(uint thr : SV_GroupIndex)
 		RWFloat[6] = position_and_radii[1][2];
 		RWFloat[7] = position_and_radii[1][3];
 	}
-
-	RWBool[2 * thr + 2] = NvRtIsLssHit();
-
-	float2x4 position_and_radii;
-	position_and_radii = NvRtLssObjectPositionsAndRadii();
-	RWFloat[0] = position_and_radii[0][0];
-	RWFloat[1] = position_and_radii[0][1];
-	RWFloat[2] = position_and_radii[0][2];
-	RWFloat[3] = position_and_radii[0][3];
-	RWFloat[4] = position_and_radii[1][0];
-	RWFloat[5] = position_and_radii[1][1];
-	RWFloat[6] = position_and_radii[1][2];
-	RWFloat[7] = position_and_radii[1][3];
 }
-
